@@ -3,6 +3,7 @@ import io
 import time
 import json
 import base64
+import logging
 import requests
 import threading
 import pandas as pd
@@ -14,8 +15,9 @@ import google.generativeai as genai
 from collections import defaultdict
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
 
-load_dotenv()
+logging.basicConfig(level=logging.INFO)
 
+load_dotenv()
 app = Flask(__name__)
 
 # ==================== History ====================
@@ -147,27 +149,19 @@ def gemini_chat(user_message="", image_b64=None, from_number="unknown"):
 
         full_message = f"""
 أنت شاب مصري اسمه «أحمد»، بتتكلم عامية مصرية طبيعية جدًا وودودة، بتحب الموضة والعناية الشخصية وبتعرف تحلل الصور كويس.
-
 الجو في {location["city"]} النهاردة حوالي {today_temp}°C
-
 دول كل المنتجات اللي موجودة عندنا دلوقتي:
 {products_text}
-
 آخر رسايل المحادثة:
 {history_lines}
-
 العميل بيقول دلوقتي: {user_message or "بعت صورة"}
-
 لو طلب لبس أو بعت صورة لبس أو منتج → رشحله من المنتجات بالشكل ده بالظبط:
 تيشيرت قطن سادة ابيض
 السعر: 130 جنيه
 الكاتيجوري: لبس صيفي
 اللينك: https://afaq-stores.com/product-details/1019
-
 مهم جدًا: استخدم أسماء المنتجات زي ما هي من غير تغيير ولا حرف.
-
 لو بعت صورة عادية → ابدأ بـ "ثانية بس أشوف الصورة..."
-
 رد دلوقتي بالعامية المصرية 100% ومتحطش إيموجي ومتقولش إنك بوت.
 """.strip()
 
@@ -183,7 +177,6 @@ def gemini_chat(user_message="", image_b64=None, from_number="unknown"):
         now = datetime.now().strftime("%Y-%m-%d %H:%M")
         conversation_history[from_number].append({"role": "user", "text": user_message or "[صورة]", "time": now})
         conversation_history[from_number].append({"role": "assistant", "text": reply, "time": now})
-
         if len(conversation_history[from_number]) > 200:
             conversation_history[from_number] = conversation_history[from_number][-200:]
 
@@ -199,28 +192,58 @@ def gemini_chat_audio(audio_file, from_number):
             f"• {row['product_name_ar']} | السعر: {row['sell_price']} جنيه | اللينك: https://afaq-stores.com/product-details/{row['product_id']}"
             for _, row in CSV_DATA.iterrows()
         )
-
         full_message = f"""
 أنت أحمد، شاب مصري بتتكلم عامية مصرية ودودة جدًا.
 المنتجات عندنا: {products_text}
 العميل بعتلك ريكورد صوتي → اسمع كويس ورد عليه زي لو كاتب الكلام بالظبط، عامية مصرية 100% بدون إيموجي.
 """
-
         response = MODEL.generate_content([full_message, audio_file])
         reply = response.text.strip() if response and response.text else "الريكورد مجاش واضح، ابعته تاني"
 
         now = datetime.now().strftime("%Y-%m-%d %H:%M")
         conversation_history[from_number].append({"role": "user", "text": "[ريكورد صوتي]", "time": now})
         conversation_history[from_number].append({"role": "assistant", "text": reply, "time": now})
-
         if len(conversation_history[from_number]) > 200:
             conversation_history[from_number] = conversation_history[from_number][-200:]
 
         return reply
-
     except Exception as e:
         print(f"Audio error: {e}")
         return "الريكورد مجاش واضح، ابعته تاني"
+
+def process_message(msg):
+    from_number = msg["from"]
+    msg_type = msg["type"]
+
+    if msg_type == "text":
+        reply = gemini_chat(msg["text"]["body"], from_number=from_number)
+
+    elif msg_type == "image":
+        image_id = msg["image"]["id"]
+        image_b64 = download_media(image_id)
+        reply = gemini_chat("بعت صورة", image_b64, from_number)
+
+    elif msg_type in ["audio", "voice"]:
+        audio_id = msg["audio"]["id"]
+        audio_b64 = download_media(audio_id)
+        if audio_b64:
+            audio_file = io.BytesIO(base64.b64decode(audio_b64))
+            audio_file.name = "voice.ogg"
+            reply = gemini_chat_audio(audio_file, from_number)
+        else:
+            reply = "الريكورد ما وصلش كويس، ابعته تاني"
+
+    elif msg_type == "video":
+        reply = gemini_chat("ده فيديو حضرتك، ثانية أشوفه...", from_number=from_number)
+
+    elif msg_type == "document":
+        filename = msg["document"].get("filename", "مستند")
+        reply = gemini_chat(f"ده مستند اسمه {filename}، ثانية أقراه...", from_number=from_number)
+
+    else:
+        reply = gemini_chat("انا مفهمتش الي انت باعته .. وضحلي الامور اكتر", from_number=from_number)
+
+    send_whatsapp_message(from_number, reply)
 
 # ==================== Routes ====================
 @app.route("/")
@@ -235,49 +258,26 @@ def webhook_verify():
 
 @app.route("/webhook", methods=["POST"])
 def webhook_receive():
-    data = request.get_json()
-    if not data or not data.get("entry"):
-        return "OK", 200
-
     try:
-        msg = data["entry"][0]["changes"][0]["value"]["messages"][0]
-        from_number = msg["from"]
-        msg_type = msg["type"]
+        data = request.get_json(force=True)
+        if not data or "entry" not in data:
+            return "OK", 200
 
-        if msg_type == "text":
-            reply = gemini_chat(msg["text"]["body"], from_number=from_number)
+        for entry in data["entry"]:
+            for change in entry.get("changes", []):
+                value = change.get("value", {})
 
-        elif msg_type == "image":
-            image_id = msg["image"]["id"]
-            image_b64 = download_media(image_id)
-            reply = gemini_chat("بعت صورة", image_b64, from_number)
+                if "messages" in value and value["messages"]:
+                    for msg in value["messages"]:
+                        process_message(msg)
 
-        elif msg_type in ["audio", "voice"]:
-            audio_id = msg["audio"]["id"]
-            audio_b64 = download_media(audio_id)
-            if audio_b64:
-                audio_file = io.BytesIO(base64.b64decode(audio_b64))
-                audio_file.name = "voice.ogg"
-                reply = gemini_chat_audio(audio_file, from_number)
-            else:
-                reply = "الريكورد ما وصلش كويس، ابعته تاني"
-
-        elif msg_type == "video":
-            reply = gemini_chat("ده فيديو حضرتك، ثانية أشوفه...", from_number=from_number)
-
-        elif msg_type == "document":
-            filename = msg["document"].get("filename", "مستند")
-            reply = gemini_chat(f"ده مستند اسمه {filename}، ثانية أقراه...", from_number=from_number)
-
-        else:
-            reply = gemini_chat("انا مفهمتش الي انت باعته .. وضحلي الامور اكتر", from_number=from_number)
-
-        send_whatsapp_message(from_number, reply)
 
     except Exception as e:
-        print(f"Webhook Error: {e}")
+        logging.error(f"Webhook Error: {e}")
+        logging.exception(e)
 
     return "OK", 200
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=False)
