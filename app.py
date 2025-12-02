@@ -3,19 +3,18 @@ import io
 import time
 import json
 import base64
-import logging
 import requests
 import threading
 import pandas as pd
 from PIL import Image
-from telegram import Update
 from datetime import datetime
 from dotenv import load_dotenv
 from flask import Flask, request
 import google.generativeai as genai
 from collections import defaultdict
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
-from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
+import logging
+import multiprocessing  # جديد
 
 logging.basicConfig(level=logging.INFO)
 load_dotenv()
@@ -73,7 +72,7 @@ CSV_DATA = pd.read_csv(csv_path)
 # ==================== WhatsApp Config ====================
 WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")
 PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID")
-WEBHOOK_VERIFY_TOKEN = os.getenv("WEBHOOK_VERIFY_TOKEN")
+WEBHOOK_VERIFY_TOKEN = os.getenv("WEBHOOK_VERIFY_TOKEN", "afaq_whatsapp_only_2025")
 
 # ==================== Helper: Download Media ====================
 def download_media(media_id):
@@ -108,7 +107,7 @@ def send_whatsapp_message(to_number, text):
     except Exception as e:
         print(f"Send failed: {e}")
 
-# ==================== Gemini Chat ====================
+# ==================== Gemini Chat (بوت ذكي - مش أحمد) ====================
 def gemini_chat(user_message="", image_b64=None, from_number="unknown"):
     try:
         location = {"city": "القاهرة", "lat": 30.04, "lon": 31.23}
@@ -147,28 +146,27 @@ def gemini_chat(user_message="", image_b64=None, from_number="unknown"):
                 history_lines += f"{time_str} - {role}: {text}\n"
 
         full_message = f"""
-أنا بوت ذكي من آفاق ستورز، بتكلم عامية مصرية 100% وأساعدك في اختيار أي لبس أو منتج.
+أنا بوت ذكي من آفاق ستورز، بتكلم عامية مصرية 100% وأساعدك في اختيار أي حاجة.
 الجو في {location["city"]} النهاردة حوالي {today_temp}°C
-دول كل المنتجات المتاحة دلوقتي:
+دول كل المنتجات المتاحة:
 {products_text}
 
-آخر رسايل المحادثة:
+آخر رسايل:
 {history_lines}
 
-العميل بيقول دلوقتي: {user_message or "بعت صورة"}
+العميل بيقول: {user_message or "بعت صورة"}
 
-لو بعت صورة → حللها ورد عليه
-لو طلب حاجة → رشحله من المنتجات بالشكل ده بالظبط:
+- لو صورة → حللها
+- لو طلب → رشحله منتج بالشكل ده:
 تيشيرت قطن سادة أبيض
 السعر: 130 جنيه
 الكاتيجوري: لبس صيفي
 اللينك: https://afaq-stores.com/product-details/1019
 
-مهم جدًا:
-- متستخدمش إيموجي خالص
-- متكدبش وتقول إنك إنسان أو اسمك أحمد
-- لو بعت صورة عادية ابدأ بـ "ثانية بس أشوف الصورة..."
-- رد بالعامية المصرية 100% وخليك ودود ومباشر
+- متستخدمش إيموجي
+- متكدبش وتقول إنك إنسان
+- لو صورة عادية ابدأ بـ "ثانية بس أشوف الصورة..."
+- رد بالعامية المصرية 100% وخليك ودود
 
 رد دلوقتي:
 """.strip()
@@ -201,7 +199,7 @@ def gemini_chat_audio(audio_file, from_number):
             for _, row in CSV_DATA.iterrows()
         )
         full_message = f"""
-أنا بوت ذكي من آفاق ستورز، بتكلم عامية مصرية وأساعدك في كل حاجة.
+أنا بوت ذكي من آفاق ستورز، بتكلم عامية مصرية.
 المنتجات عندنا: {products_text}
 العميل بعتلك ريكورد صوتي → اسمع كويس ورد عليه بالعامية المصرية 100% بدون إيموجي.
 """
@@ -277,16 +275,20 @@ def webhook_receive():
         logging.exception(e)
     return "OK", 200
 
-# ==================== Telegram Bot ====================
+# ==================== Telegram Bot (الحل النهائي - Process) ====================
+from telegram import Update
+from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-if TELEGRAM_TOKEN:
-    print("جاري تشغيل بوت تليجرام...")
+def run_telegram_bot():
+    if not TELEGRAM_TOKEN:
+        return
+
+    print("بوت تليجرام بيشتغل دلوقتي...")
 
     async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
-            "أهلًا وسهلًا بي حضرتك! أنا البوت الذكي بتاع آفاق ستورز\n"
-            "ابعتلي أي حاجة: صورة، صوت، نص.. وهساعدك فورًا!"
+            "أهلًا وسهلًا! أنا البوت الذكي بتاع آفاق ستورز 🏪\n"
+            "ابعتلي أي حاجة وهساعدك على طول!"
         )
 
     async def handle_telegram(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -310,14 +312,20 @@ if TELEGRAM_TOKEN:
             reply = gemini_chat(update.message.text, from_number=user_id)
 
         else:
-            reply = "مش فاهم اللي انت بعته، جرب نص أو صورة أو صوت"
+            reply = "مش فاهم إيه اللي بعته، جرب نص أو صورة أو صوت"
 
         await update.message.reply_text(reply)
 
     application = Application.builder().token(TELEGRAM_TOKEN).build()
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_telegram))
-    threading.Thread(target=lambda: application.run_polling(drop_pending_updates=True), daemon=True).start()
+    application.run_polling(drop_pending_updates=True)
+
+if TELEGRAM_TOKEN:
+    multiprocessing.set_start_method('spawn', force=True)
+    p = multiprocessing.Process(target=run_telegram_bot, daemon=True)
+    p.start()
+    print("بوت تليجرام شغال في Process منفصل ✅")
 
 # ==================== Run Server ====================
 if __name__ == "__main__":
