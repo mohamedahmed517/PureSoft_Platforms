@@ -215,13 +215,14 @@ def telegram_webhook():
 @app.route("/")
 def home():
     if TELEGRAM_TOKEN:
-        webhook_url = request.url_root.rstrip("/") + "/telegram"
+        webhook_url = f"https://{request.host}/telegram"
+        
         set_webhook = requests.get(
             f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/setWebhook?url={webhook_url}"
         ).json()
-        status = "نجح" if set_webhook.get("ok") else "فشل"
-        return f"<h1>بوت آفاق ستورز شغال 100%!</h1><p>Telegram Webhook: {status}</p><pre>{set_webhook}</pre>"
-    return "<h1>البوت شغال!</h1>"
+        
+        return f"<h1>البوت شغال!</h1><p>Webhook: {'نجح' if set_webhook.get('ok') else 'فشل'}</p><pre>{set_webhook}</pre>"
+    return "البوت شغال!"
 
 # ==================== Run ====================
 if __name__ == "__main__":
