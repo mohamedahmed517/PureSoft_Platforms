@@ -3,40 +3,41 @@ import io
 import time
 import json
 import base64
-import logging
 import requests
 import threading
 import pandas as pd
 from PIL import Image
 from datetime import datetime
 from dotenv import load_dotenv
-import google.generativeai as genai
 from collections import defaultdict
+import google.generativeai as genai
 from flask import Flask, request, jsonify
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
 
-logging.basicConfig(level=logging.INFO)
 load_dotenv()
 app = Flask(__name__)
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID")
-WEBHOOK_VERIFY_TOKEN = os.getenv("WEBHOOK_VERIFY_TOKEN", "afaq_whatsapp_only_2025")
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "8319255971:AAH5Hs8jrXcE9YGJvEi7TB9NTFJ16sQVYtk")
+WEBHOOK_VERIFY_TOKEN = os.getenv("WEBHOOK_VERIFY_TOKEN")
 
 if not GEMINI_API_KEY:
     raise ValueError("GEMINI_API_KEY مطلوب!")
 
-# ==================== History ====================
-HISTORY_FILE = "history.json"
+HISTORY_FILE = "/data/history.json"
+os.makedirs("/data", exist_ok=True)
 conversation_history = defaultdict(list)
 
-try:
-    with open(HISTORY_FILE, "r", encoding="utf-8") as f:
-        conversation_history = defaultdict(list, {str(k): v for k, v in json.load(f).items()})
-except:
-    pass
+if os.path.exists(HISTORY_FILE):
+    try:
+        with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+            loaded = json.load(f)
+            conversation_history = defaultdict(list, {str(k): v for k, v in loaded.items()})
+        print(f"تم تحميل {len(conversation_history)} محادثة قديمة")
+    except:
+        pass
 
 def save_history():
     while True:
@@ -44,14 +45,13 @@ def save_history():
         try:
             with open(HISTORY_FILE, "w", encoding="utf-8") as f:
                 json.dump(dict(conversation_history), f, ensure_ascii=False, indent=2)
-        except: pass
+        except:
+            pass
 threading.Thread(target=save_history, daemon=True).start()
 
-# ==================== Gemini Setup ====================
 genai.configure(api_key=GEMINI_API_KEY)
-
 MODEL = genai.GenerativeModel(
-    'gemini-2.0-flash',
+    'gemini-1.5-flash',
     generation_config={"temperature": 0.9, "max_output_tokens": 2048},
     safety_settings=[
         {"category": HarmCategory.HARM_CATEGORY_HARASSMENT, "threshold": HarmBlockThreshold.BLOCK_NONE},
@@ -61,60 +61,85 @@ MODEL = genai.GenerativeModel(
     ]
 )
 
-# ==================== Load Products ====================
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-csv_path = os.path.join(BASE_DIR, 'products.csv')
-CSV_DATA = pd.read_csv(csv_path)
+CSV_DATA = pd.read_csv('products.csv')
 
-# ==================== Gemini Chat ====================
-def gemini_chat(text="", image_b64=None, user_id="unknown"):
+def gemini_chat(text="", image_b64=None, user_key="unknown"):
     try:
-        products = "\n".join(
-            f"• {r['product_name_ar']} | {r['sell_price']} جنيه | https://afaq-stores.com/product-details/{r['product_id']}"
-            for _, r in CSV_DATA.iterrows()
-        ) if not CSV_DATA.empty else "مش لاقي منتجات دلوقتي"
+        if len(conversation_history[user_key]) == 0:
+            return "أهلاً وسهلاً! أنا البوت الذكي بتاع آفاق ستورز 👋\nإزيك؟ تحب أساعدك في إيه النهاردة؟"
 
-        history = "\n".join(
-            f"{e.get('time','')} - {'العميل' if e['role']=='user' else 'البوت'}: {e['text']}"
-            for e in conversation_history[user_id][-40:]
+        try:
+            ip = request.headers.get("X-Forwarded-For", request.remote_addr or "127.0.0.1").split(",")[0].strip()
+            location = {"city": "cairo", "lat": 30.04, "lon": 31.23}
+            if not ip.startswith(("10.", "172.", "192.168.", "127.")):
+                r = requests.get(f"https://ipwho.is/{ip}", timeout=5).json()
+                if r.get("city"):
+                    location = {"city": r["city"], "lat": r["latitude"], "lon": r["longitude"]}
+        except:
+            location = {"city": "cairo", "lat": 30.04, "lon": 31.23}
+
+        try:
+            w = requests.get(f"https://api.open-meteo.com/v1/forecast?latitude={location['lat']}&longitude={location['lon']}&daily=temperature_2m_max,temperature_2m_min", timeout=5).json()
+            today_temp = round((w["daily"]["temperature_2m_max"][0] + w["daily"]["temperature_2m_min"][0]) / 2, 1)
+        except:
+            today_temp = 25
+
+        products_text = "\n".join(
+            f"• {row['product_name_ar']} | السعر: {row['sell_price']} جنيه | https://afaq-stores.com/product-details/{row['product_id']}"
+            for _, row in CSV_DATA.iterrows()
         )
 
+        recent = conversation_history[user_key][-30:]
+        history_text = ""
+        for entry in recent:
+            role = "العميل" if entry["role"] == "user" else "البوت"
+            history_text += f"{entry['time']} - {role}: {entry['text']}\n"
+
         prompt = f"""
-أنا بوت ذكي من آفاق ستورز، بتكلم عامية مصرية ودودة.
-المنتجات: {products}
-آخر رسايل: {history}
-العميل قال: {text or "بعت صورة"}
-- لو صورة → ابدأ بـ "ثانية بس أشوف الصورة..."
-- لو طلب → رشح منتج من القايمة كده:
-تيشيرت قطن سادة
-السعر: 150 جنيه
+أنت البوت الذكي الخاص بآفاق ستورز، بتتكلم عامية مصرية ودودة وواضحة جدًا.
+لو سألك "إنت مين؟" أو "إنت بوت؟" → رد بالحرف: "أيوه يا فندم، أنا البوت الذكي بتاع آفاق ستورز، موجود عشان أساعدك في أي حاجة"
+
+العميل موجود في {location["city"]} والجو النهاردة حوالي {today_temp}°C
+
+كل المنتجات اللي عندنا:
+{products_text}
+
+تاريخ المحادثة معاه:
+{history_text}
+
+العميل بيقول دلوقتي: {text or "بعت صورة"}
+
+- لو بعت صورة → ابدأ بـ "ثانية بس أشوف الصورة..."
+- لو طلب منتج → رشح من القايمة بالشكل ده:
+تيشيرت قطن سادة أبيض
+السعر: 130 جنيه
 اللينك: https://afaq-stores.com/product-details/123
-- متستخدمش إيموجي
-رد دلوقتي بالعامية المصرية:
+
+رد دلوقتي بالعامية المصرية ومتستخدمش إيموجي كتير.
 """.strip()
 
         if image_b64:
             img = Image.open(io.BytesIO(base64.b64decode(image_b64)))
-            resp = MODEL.generate_content([prompt, img])
+            response = MODEL.generate_content([prompt, img])
         else:
-            resp = MODEL.generate_content(prompt)
+            response = MODEL.generate_content(prompt)
 
-        reply = (resp.text or "ثواني وأرجعلك...").strip()
+        reply = response.text.strip() if response and response.text else "ثواني بس وأرجعلك..."
 
         now = datetime.now().strftime("%Y-%m-%d %H:%M")
-        conversation_history[user_id].extend([
+        conversation_history[user_key].extend([
             {"role": "user", "text": text or "[صورة]", "time": now},
             {"role": "assistant", "text": reply, "time": now}
         ])
-        if len(conversation_history[user_id]) > 200:
-            conversation_history[user_id] = conversation_history[user_id][-200:]
+        if len(conversation_history[user_key]) > 200:
+            conversation_history[user_key] = conversation_history[user_key][-200:]
 
         return reply
+
     except Exception as e:
         print("Gemini Error:", e)
-        return "ثواني وأرجعلك..."
+        return "ثواني بس، فيه مشكلة وهرجعلك..."
 
-# ==================== WhatsApp ====================
 def download_media(media_id):
     try:
         url = f"https://graph.facebook.com/v20.0/{media_id}"
@@ -122,17 +147,14 @@ def download_media(media_id):
         j = requests.get(url, headers=headers, timeout=10).json()
         data = requests.get(j["url"], headers=headers, timeout=30).content
         return base64.b64encode(data).decode()
-    except Exception as e:
-        print("Download error:", e)
+    except:
         return None
 
 def send_whatsapp(to, text):
     if not WHATSAPP_TOKEN or not PHONE_NUMBER_ID: return
     url = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
     payload = {"messaging_product": "whatsapp", "to": to, "type": "text", "text": {"body": text[:4000]}}
-    try:
-        requests.post(url, headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}"}, json=payload, timeout=10)
-    except: pass
+    requests.post(url, headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}"}, json=payload, timeout=10)
 
 @app.route("/whatsapp", methods=["GET", "POST"])
 def whatsapp_webhook():
@@ -148,11 +170,13 @@ def whatsapp_webhook():
         for change in entry.get("changes", []):
             for msg in change.get("value", {}).get("messages", []):
                 from_num = msg["from"]
+                user_key = f"whatsapp:{from_num}"
+
                 if msg["type"] == "text":
-                    reply = gemini_chat(msg["text"]["body"], from_number=from_num)
+                    reply = gemini_chat(msg["text"]["body"], user_key=user_key)
                 elif msg["type"] == "image":
                     b64 = download_media(msg["image"]["id"])
-                    reply = gemini_chat("بعت صورة", b64, from_num)
+                    reply = gemini_chat("بعت صورة", image_b64=b64, user_key=user_key)
                 elif msg["type"] in ["audio", "voice"]:
                     b64 = download_media(msg["audio"]["id"])
                     if b64:
@@ -162,31 +186,32 @@ def whatsapp_webhook():
                     else:
                         reply = "الصوت مش واضح"
                 else:
-                    reply = "مش فاهم، ابعت نص أو صورة"
+                    reply = "ابعت نص أو صورة"
+
                 send_whatsapp(from_num, reply)
     return "OK", 200
 
-# ==================== Telegram Webhook ====================
 @app.route("/telegram", methods=["POST"])
 def telegram_webhook():
     update = request.get_json()
-    if not update or "message" not in update: return jsonify({}), 200
+    if not update or "message" not in update: return jsonify(success=True), 200
 
     msg = update["message"]
-    user_id = str(msg["from"]["id"])
     chat_id = msg["chat"]["id"]
+    user_id = str(msg["from"]["id"])
+    user_key = f"telegram:{user_id}"
 
     if "text" in msg:
-        reply = gemini_chat(msg["text"], user_id=user_id)
+        reply = gemini_chat(msg["text"], user_key=user_key)
     elif "photo" in msg:
         file_id = msg["photo"][-1]["file_id"]
         file_info = requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile?file_id={file_id}").json()
         if file_info.get("ok"):
-            file_path = file_info["result"]["file_path"]
-            file_url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_path}"
-            img_data = requests.get(file_url).content
+            path = file_info["result"]["file_path"]
+            url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{path}"
+            img_data = requests.get(url).content
             b64 = base64.b64encode(img_data).decode()
-            reply = gemini_chat("بعت صورة", b64, user_id=user_id)
+            reply = gemini_chat("بعت صورة", image_b64=b64, user_key=user_key)
         else:
             reply = "مش قادر أشوف الصورة"
     elif "voice" in msg or "audio" in msg:
@@ -194,9 +219,9 @@ def telegram_webhook():
         file_id = voice["file_id"]
         file_info = requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile?file_id={file_id}").json()
         if file_info.get("ok"):
-            file_path = file_info["result"]["file_path"]
-            file_url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_path}"
-            audio_data = requests.get(file_url).content
+            path = file_info["result"]["file_path"]
+            url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{path}"
+            audio_data = requests.get(url).content
             audio_io = io.BytesIO(audio_data)
             audio_io.name = "voice.ogg"
             reply = MODEL.generate_content(["اسمع الريكورد ده ورد بالعامية المصرية", audio_io]).text
@@ -207,24 +232,19 @@ def telegram_webhook():
 
     requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
                   json={"chat_id": chat_id, "text": reply})
-    return jsonify({}), 200
+    return jsonify(success=True), 200
 
-# ==================== Home ====================
 @app.route("/")
 def home():
     if TELEGRAM_TOKEN:
         webhook_url = f"https://{request.host}/telegram"
-        
-        set_webhook = requests.get(
+        set_result = requests.get(
             f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/setWebhook?url={webhook_url}"
         ).json()
-        
-        return f"<h1>البوت شغال!</h1><p>Webhook: {'نجح' if set_webhook.get('ok') else 'فشل'}</p><pre>{set_webhook}</pre>"
-    return "البوت شغال!"
+        status = "نجح" if set_result.get("ok") else "فشل"
+        return f"<h1>بوت آفاق ستورز شغال 100%!</h1><p>Telegram Webhook: {status}</p>"
+    return "<h1>البوت شغال!</h1>"
 
-# ==================== Run ====================
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
-
-
