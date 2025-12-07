@@ -52,7 +52,7 @@ threading.Thread(target=save_history, daemon=True).start()
 # ====================== Gemini ======================
 genai.configure(api_key=GEMINI_API_KEY)
 MODEL = genai.GenerativeModel(
-    'gemini-1.5-flash',
+    'gemini-1.5-flash-latest',
     generation_config={"temperature": 0.9, "max_output_tokens": 2048},
     safety_settings=[
         {"category": HarmCategory.HARM_CATEGORY_HARASSMENT, "threshold": HarmBlockThreshold.BLOCK_NONE},
@@ -268,4 +268,5 @@ def home():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
+
 
