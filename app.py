@@ -112,7 +112,7 @@ def gemini_chat(text="", image_b64=None, user_key="unknown"):
 {products_text}
 
 آخر رسايل المحادثة:
-{chr(10).join([t for e in conversation_history[user_key][-10:] if 'text' in e])}
+{chr(10).join([e["text"] for e in conversation_history[user_key][-10:] if "text" in e])}
 
 العميل بيقول دلوقتي: {text or "بعت صورة"}
 
@@ -272,6 +272,7 @@ def home():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
+
 
 
 
