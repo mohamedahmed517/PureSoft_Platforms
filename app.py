@@ -17,17 +17,15 @@ from google.generativeai.types import HarmCategory, HarmBlockThreshold
 load_dotenv()
 app = Flask(__name__)
 
-# ====================== المتغيرات ======================
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")
 PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID")
-WEBHOOK_VERIFY_TOKEN = os.getenv("WEBHOOK_VERIFY_TOKEN", "afaq_whatsapp_only_2025")
+WEBHOOK_VERIFY_TOKEN = os.getenv("WEBHOOK_VERIFY_TOKEN")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 
 if not GEMINI_API_KEY:
     raise ValueError("GEMINI_API_KEY مطلوب!")
 
-# ====================== حفظ التاريخ دايمًا ======================
 HISTORY_FILE = "/data/history.json"
 os.makedirs("/data", exist_ok=True)
 conversation_history = defaultdict(list)
@@ -51,7 +49,7 @@ def save_history():
             pass
 threading.Thread(target=save_history, daemon=True).start()
 
-# ====================== Gemini (نموذج شغال 100%) ======================
+# ====================== Gemini ======================
 genai.configure(api_key=GEMINI_API_KEY)
 MODEL = genai.GenerativeModel(
     'gemini-2.0-flash',
@@ -66,18 +64,15 @@ MODEL = genai.GenerativeModel(
 
 CSV_DATA = pd.read_csv('products.csv')
 
-# ====================== دالة الرد (النسخة المضمونة 100%) ======================
 def gemini_chat(text="", image_b64=None, user_key="unknown"):
     try:
         now = datetime.now().strftime("%Y-%m-%d %H:%M")
 
-        # أول رسالة → ترحيب + حفظها في الهيستوري
         if len(conversation_history[user_key]) == 0:
             reply = "أهلاً وسهلاً! أنا البوت الذكي بتاع آفاق ستورز\nإزيك؟ تحب أساعدك في إيه النهاردة؟"
             conversation_history[user_key].append({"role": "assistant", "text": reply, "time": now})
             return reply
 
-        # جلب الموقع والطقس
         try:
             ip = request.headers.get("X-Forwarded-For", request.remote_addr or "127.0.0.1").split(",")[0].strip()
             location = "القاهرة"
@@ -117,7 +112,7 @@ def gemini_chat(text="", image_b64=None, user_key="unknown"):
 {products_text}
 
 آخر رسايل المحادثة:
-{chr(10).join([t for _, t in conversation_history[user_ip][-10:]])}
+{chr(10).join([t for e in conversation_history[user_key][-10:] if 'text' in e])}
 
 العميل بيقول دلوقتي: {text or "بعت صورة"}
 
@@ -277,5 +272,6 @@ def home():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
+
 
 
