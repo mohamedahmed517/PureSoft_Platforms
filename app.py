@@ -37,6 +37,7 @@ if os.path.exists(HISTORY_FILE):
             conversation_history = defaultdict(list, {str(k): v for k, v in loaded.items()})
         print(f"تم تحميل {len(conversation_history)} محادثة قديمة")
     except:
+        print("الhistory file مش موجود نهائي")
         pass
 
 def save_history():
@@ -268,6 +269,7 @@ def home():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
+
 
 
 
