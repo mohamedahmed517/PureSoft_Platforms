@@ -91,32 +91,61 @@ def gemini_chat(text="", image_b64=None, user_key="unknown"):
         except:
             location, temp = "القاهرة", "25"
 
-        # تاريخ مختصر
         history_text = "\n".join([
             f"{'العميل' if e['role']=='user' else 'البوت'}: {e['text'][:120]}"
             for e in conversation_history[user_key][-10:]
         ])
 
-        # منتجات مختصرة
-        products_short = "\n".join([
-            f"• {row['product_name_ar']} | {row['sell_price']} جنيه | https://afaq-stores.com/product-details/{row['product_id']}"
-            for _, row in CSV_DATA.head(30).iterrows()
-        ])
+        products_text = "المنتجات المتاحة (ممنوع تغيير ولا حرف في الاسم أبدًا):\n"
+        
+        for _, row in CSV_DATA.iterrows():
+            name = str(row['product_name_ar']).strip()
+            price = float(row['sell_price'])
+            cat = str(row['category']).strip()
+            pid = str(row['product_id'])
+            products_text += f"• {name} | السعر: {price} جنيه | الكاتيجوري: {cat} | اللينك: https://afaq-stores.com/product-details/{pid}\n"
 
-        prompt = f"""أنت البوت الذكي بتاع آفاق ستورز، بتتكلم عامية مصرية ودودة.
-لو سألك "إنت مين؟" → قوله: أيوه أنا البوت الذكي بتاع آفاق ستورز.
-العميل في {location} والجو حوالي {temp}°C
+        prompt = f"""
+أنت البوت الذكي بتاع آفاق ستورز، بتتكلم عامية مصرية ودودة، بتحب الموضة والعناية الشخصية وب تعرف تحلل الصور كويس.
+
+الجو في {location} النهاردة حوالي {temp}°C
+
 آخر كلام:
 {history_text}
-المنتجات المتاحة:
-{products_short}
+
+دول كل المنتجات اللي موجودة عندنا دلوقتي (خد بالك من الأسماء دي بالحرف لأن اللينكات مربوطة بيها):
+{products_text}
+
+آخر رسايل المحادثة:
+{chr(10).join([t for _, t in conversation_history[user_ip][-10:]])}
+
 العميل بيقول دلوقتي: {text or "بعت صورة"}
-لو صورة → ابدأ بـ "ثانية بس أشوف الصورة..."
-لو طلب حاجة → رشح من المنتجات بالشكل ده:
-تيشيرت قطن أبيض
+
+لو طلب لبس أو عناية أو بعت صورة لبس أو منتج:
+- رشحله من المنتجات اللي فوق بالشكل ده بالظبط (سطر للاسم، سطر للسعر، سطر للكاتيجوري، سطر للينك):
+تيشيرت قطن سادة ابيض
 السعر: 130 جنيه
-اللينك: https://afaq-stores.com/product-details/123
-رد دلوقتي بالعامية المصرية.""".strip()
+الكاتيجوري: لبس صيفي
+اللينك: https://afaq-stores.com/product-details/1019
+
+سكارف كشمير طويل
+السعر: 290 جنيه
+الكاتيجوري: لبس خريفي
+اللينك: https://afaq-stores.com/product-details/1014
+
+جاكيت جلد اسود تقيل مبطن فرو
+السعر: 720 جنيه
+الكاتيجوري: لبس شتوي
+اللينك: https://afaq-stores.com/product-details/1001
+
+مهم جدًا: استخدم أسماء المنتجات زي ما هي مكتوبة فوق من غير ما تقصرها أو تغير فيها ولا حرف.
+
+لو بعت صورة عادية أو سأل حاجة مش عن لبس → رد عليه عادي وحلل الصورة من غير ما ترشح منتجات.
+
+لو في صورة → ابدأ الرد بـ "ثانية بس أشوف الصورة..."
+
+رد دلوقتي بالعامية المصرية 100% ومتحطش إيموجي خالص ومتقولش إنك بوت أبدًا.
+""".strip()
 
         if image_b64:
             img = Image.open(io.BytesIO(base64.b64decode(image_b64)))
@@ -126,7 +155,6 @@ def gemini_chat(text="", image_b64=None, user_key="unknown"):
 
         reply = response.text.strip() if response and hasattr(response, "text") and response.text else "ثواني بس وأرجعلك..."
 
-        # حفظ الرسايل (مهم جدًا!)
         conversation_history[user_key].extend([
             {"role": "user", "text": text or "[صورة]", "time": now},
             {"role": "assistant", "text": reply, "time": now}
@@ -249,4 +277,5 @@ def home():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
+
 
