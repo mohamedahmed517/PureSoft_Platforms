@@ -9,9 +9,9 @@ import pandas as pd
 from PIL import Image
 from datetime import datetime
 from dotenv import load_dotenv
-from flask import Flask, request, jsonify
 from collections import defaultdict
 import google.generativeai as genai
+from flask import Flask, request, jsonify
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
 
 load_dotenv()
@@ -163,7 +163,6 @@ def gemini_chat(text="", image_b64=None, user_key="unknown"):
         print(f"Gemini Error: {e}")
         return "ثواني بس، فيه مشكلة صغيرة وهرجعلك حالا..."
 
-# ====================== واتساب ======================
 def download_media(media_id):
     try:
         url = f"https://graph.facebook.com/v20.0/{media_id}"
@@ -214,7 +213,6 @@ def whatsapp_webhook():
                 send_whatsapp(from_num, reply)
     return "OK", 200
 
-# ====================== تليجرام ======================
 @app.route("/telegram", methods=["POST"])
 def telegram_webhook():
     update = request.get_json()
@@ -258,7 +256,6 @@ def telegram_webhook():
                   json={"chat_id": chat_id, "text": reply})
     return jsonify(success=True), 200
 
-# ====================== الصفحة الرئيسية ======================
 @app.route("/")
 def home():
     if TELEGRAM_TOKEN:
@@ -268,11 +265,6 @@ def home():
         return f"<h1>بوت آفاق ستورز شغال 100%!</h1><p>Telegram Webhook: {status}</p>"
     return "<h1>البوت شغال!</h1>"
 
-# ====================== تشغيل السيرفر ======================
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
-
-
-
-
