@@ -16,7 +16,6 @@ import google.generativeai as genai
 from flask import Flask, request, jsonify
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
 
-
 load_dotenv()
 app = Flask(__name__)
 
@@ -29,7 +28,6 @@ if not GEMINI_API_KEY:
 
 HISTORY_FILE = "/data/history.json"
 os.makedirs("/data", exist_ok=True)
-
 conversation_history = defaultdict(list)
 
 def get_db_connection():
@@ -100,7 +98,6 @@ def save_history():
 
 threading.Thread(target=save_history, daemon=True).start()
 
-# ====================== Gemini ======================
 genai.configure(api_key=GEMINI_API_KEY)
 MODEL = genai.GenerativeModel(
     'gemini-2.5-flash',
@@ -126,19 +123,6 @@ def gemini_chat(text="", image_b64=None, user_key="unknown"):
             conversation_history[user_key].append({"role": "assistant", "text": reply, "time": now})
             return reply
 
-        try:
-            ip = request.headers.get("X-Forwarded-For", request.remote_addr or "127.0.0.1").split(",")[0].strip()
-            location = "cairo"
-            temp = "25"
-            if not ip.startswith(("10.", "172.", "192.168.", "127.")):
-                r = requests.get(f"https://ipwho.is/{ip}", timeout=3).json()
-                if r.get("city"):
-                    location = r["city"]
-                    w = requests.get(f"https://api.open-meteo.com/v1/forecast?latitude={r['latitude']}&longitude={r['longitude']}&daily=temperature_2m_max", timeout=3).json()
-                    temp = str(round(w["daily"]["temperature_2m_max"][0])) if w.get("daily") else "25"
-        except:
-            location, temp = "cairo", "25"
-
         history_text = "\n".join([
             f"{'العميل' if e['role']=='user' else 'البوت'}: {e['text'][:120]}"
             for e in conversation_history[user_key][-10:]
@@ -155,8 +139,6 @@ def gemini_chat(text="", image_b64=None, user_key="unknown"):
 
         prompt = f"""
 أنت البوت الذكي بتاع آفاق ستورز، بتتكلم عامية مصرية ودودة، بتحب الموضة والعناية الشخصية وب تعرف تحلل الصور كويس.
-
-الجو في {location} النهاردة حوالي {temp}°C
 
 آخر محادثة:
 {history_text}
@@ -263,9 +245,9 @@ def home():
     if TELEGRAM_TOKEN:
         webhook_url = f"https://{request.host}/telegram"
         set_result = requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/setWebhook?url={webhook_url}").json()
-        status = "نجح" if set_result.get("ok") else "فشل"
-        return f"<h1>بوت آفاق ستورز شغال 100%!</h1><p>Telegram Webhook: {status}</p>"
-    return "<h1>البوت شغال!</h1>"
+        status = "Success" if set_result.get("ok") else "Failed"
+        return f"<h1>Afaq Store bot is 100% working!</h1><p>Web hook on Telegram: {status}</p>"
+    return "<h1>bot is working</h1>"
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
