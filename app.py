@@ -4,47 +4,100 @@ import time
 import json
 import base64
 import requests
+import psycopg2
 import threading
 import pandas as pd
 from PIL import Image
 from datetime import datetime
 from dotenv import load_dotenv
+from psycopg2.extras import Json
 from collections import defaultdict
 import google.generativeai as genai
 from flask import Flask, request, jsonify
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
+
 
 load_dotenv()
 app = Flask(__name__)
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 if not GEMINI_API_KEY:
     raise ValueError("GEMINI_API_KEY Not Found!")
 
 HISTORY_FILE = "/data/history.json"
 os.makedirs("/data", exist_ok=True)
+
 conversation_history = defaultdict(list)
 
-if os.path.exists(HISTORY_FILE):
+def get_db_connection():
+    if DATABASE_URL:
+        return psycopg2.connect(DATABASE_URL)
+    return None
+
+if DATABASE_URL:
     try:
-        with open(HISTORY_FILE, "r", encoding="utf-8") as f:
-            loaded = json.load(f)
-            conversation_history = defaultdict(list, {str(k): v for k, v in loaded.items()})
-        print(f"{len(conversation_history)} has been loaded with an old conversation")
-    except:
-        print("History File Not Found")
-        pass
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS conversation_history (
+                        user_key TEXT PRIMARY KEY,
+                        history JSONB NOT NULL DEFAULT '[]'::jsonb
+                    )
+                """)
+                conn.commit()
+        print("Database table ready")
+    except Exception as e:
+        print(f"DB setup error: {e}")
+
+def load_all_history():
+    if DATABASE_URL:
+        try:
+            with get_db_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT user_key, history FROM conversation_history")
+                    rows = cur.fetchall()
+                    for user_key, hist in rows:
+                        conversation_history[user_key] = hist
+                    print(f"Loaded {len(rows)} users from DB")
+        except Exception as e:
+            print(f"DB load error: {e}")
+    else:
+        if os.path.exists(HISTORY_FILE):
+            try:
+                with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+                    loaded = json.load(f)
+                    conversation_history.update({str(k): v for k, v in loaded.items()})
+                print(f"{len(conversation_history)} has been loaded with an old conversation")
+            except Exception as e:
+                print(f"History File Load Error: {e}")
+
+load_all_history()
 
 def save_history():
     while True:
         time.sleep(60)
         try:
-            with open(HISTORY_FILE, "w", encoding="utf-8") as f:
-                json.dump(dict(conversation_history), f, ensure_ascii=False, indent=2)
-        except:
-            print('Saving Failed')
+            if DATABASE_URL:
+                with get_db_connection() as conn:
+                    with conn.cursor() as cur:
+                        for user_key, hist in list(conversation_history.items()):
+                            cur.execute("""
+                                INSERT INTO conversation_history (user_key, history)
+                                VALUES (%s, %s)
+                                ON CONFLICT (user_key) DO UPDATE SET history = EXCLUDED.history
+                            """, (user_key, Json(hist)))
+                    conn.commit()
+                print("History saved to DB")
+            else:
+                with open(HISTORY_FILE, "w", encoding="utf-8") as f:
+                    json.dump(dict(conversation_history), f, ensure_ascii=False, indent=2)
+                print("History saved to file")
+        except Exception as e:
+            print(f'Saving Failed: {e}')
+
 threading.Thread(target=save_history, daemon=True).start()
 
 # ====================== Gemini ======================
